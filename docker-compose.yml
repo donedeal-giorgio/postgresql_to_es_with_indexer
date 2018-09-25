@@ -41,6 +41,15 @@ services:
       build: .
       command: ["indexer"]
       environment:
+      - ES_NODE_MASTER=elasticsearch
+      - ES_INDEX_NAME=film
+      - ES_CHUNK_SIZE=10
+      - ES_DOCUMENT_NAME=movie
+      - POSTGRES_USER=dummy
+      - POSTGRES_PASS=dummy
+      - POSTGRES_DBNAME=ddb
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
       - QUEUE_NAME=FILMS
       - SQS_ENDPOINT=http://queue:4576
       - AWS_ACCESS_KEY=test
@@ -61,3 +70,14 @@ services:
       - SERVICES=sqs:4576
       - DEBUG=false
       - DEFAULT_REGION=us-east-1
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.3.1
+    environment:
+      - http.host=0.0.0.0
+      - transport.host=127.0.0.1
+      - xpack.security.enabled=false
+    expose:
+      - 9200
+      - 9300
+    ports:
+      - 9200:9200
