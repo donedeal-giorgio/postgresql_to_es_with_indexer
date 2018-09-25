@@ -1,0 +1,63 @@
+version: '3.2'
+services:
+  db:
+    image: postgres:9.4
+    restart: always
+    environment:
+      - ALLOW_IP_RANGE=0.0.0.0/0
+      - POSTGRES_PASSWORD=dummy
+      - POSTGRES_DB=ddb
+      - POSTGRES_USER=dummy
+    ports:
+      - 5432:5432
+    volumes:
+      - ./sql/:/docker-entrypoint-initdb.d/
+  listener:
+     build: .
+     environment:
+      - POSTGRES_USER=dummy
+      - POSTGRES_PASS=dummy
+      - POSTGRES_DBNAME=ddb
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - PYTHONUNBUFFERED=0
+      - SUBSCRIBE_NOTIFICATION=film_events
+      - QUEUE_NAME=FILMS
+      - SQS_ENDPOINT=http://queue:4576
+      - AWS_ACCESS_KEY=test
+      - AWS_SECRET_KEY=test
+      - AWS_SESSION_TOKEN=test
+     command: ["listener"]
+  sqs-setup:
+      build: .
+      environment:
+      - QUEUE_NAME=FILMS
+      - SQS_URL=http://queue:4576
+      - AWS_ACCESS_KEY=test
+      - AWS_SECRET_KEY=test
+      - AWS_SESSION_TOKEN=test
+      command: ["create_queue"]
+  indexer:
+      build: .
+      command: ["indexer"]
+      environment:
+      - QUEUE_NAME=FILMS
+      - SQS_ENDPOINT=http://queue:4576
+      - AWS_ACCESS_KEY=test
+      - AWS_SECRET_KEY=test
+      - AWS_SESSION_TOKEN=test
+      - PYTHONUNBUFFERED=1
+  queue:
+    image: localstack/localstack:0.8.7
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "-", "http://localhost:8080/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "4576:4576"
+      - "8080:8080"
+    environment:
+      - SERVICES=sqs:4576
+      - DEBUG=false
+      - DEFAULT_REGION=us-east-1

@@ -1,0 +1,6 @@
+README.md
+src/property.egg-info/PKG-INFO
+src/property.egg-info/SOURCES.txt
+src/property.egg-info/dependency_links.txt
+src/property.egg-info/entry_points.txt
+src/property.egg-info/top_level.txt
