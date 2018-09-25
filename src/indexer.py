@@ -1,10 +1,14 @@
 #!/usr/bin/python -u
 
-import os, time, sys
+import os
 import boto3
+import psycopg2
+from psycopg2 import extras
+from psycopg2 import extensions
+from elasticsearch.helpers import parallel_bulk
+from elasticsearch import Elasticsearch
+from elasticsearch.connection.http_requests import RequestsHttpConnection
 
-
-# sys.stdout = unbuffered
 
 class Indexer(object):
     """
@@ -24,53 +28,78 @@ class Indexer(object):
             aws_session_token=os.environ.get('AWS_SESSION_TOKEN', 'test'))
         self.queue = sqs.get_queue_by_name(QueueName=os.environ['QUEUE_NAME'])
 
+        self.elasticsearch = Elasticsearch(
+            hosts=[os.environ['ES_NODE_MASTER']],
+            connection_class=RequestsHttpConnection
+        )
+
     def run(self):
-        # if the number of messages from the db is less than 100, wait
-        # until we have enough messages to send to ES.
-        # But if 5 seconds are elapsed since the last message, then send
-        # to ES whatever we have.
         while 1:
+            # docs summary only contains the IDs
             docs_summary = self.get_messages()
-            self.get_full_records_from_db(docs_summary=docs_summary)
+            try:
+                parallel_bulk(
+                    client=self.elasticsearch,
+                    actions=self.get_full_records_from_db(docs_summary=docs_summary),
+                    chunk_size=os.environ['ES_CHUNK_SIZE']
+                )
+            except ValueError, ex:
+                print "Nothing to upload"
+                pass
+            except Exception, ex:
+                raise ex
 
     def get_full_records_from_db(self, docs_summary=None):
+
+        user = os.getenv('POSTGRES_USER')
+        password = os.getenv('POSTGRES_PASS')
+        dbname = os.getenv('POSTGRES_DBNAME')
+        port = os.getenv('POSTGRES_PORT')
+        host = os.getenv('POSTGRES_HOST')
+
+        conn = psycopg2.connect(dbname=dbname, user=user, password=password, host=host, port=int(port))
+        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        dir_curs = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
         if docs_summary is None:
             docs_summary = []
 
         for doc in docs_summary:
-            print "select * from {} where uid = {}".format(doc['table'], doc['id'])
+            dir_curs.execute("select * from {} where uid = {}".format(doc['table'], doc['id']))
+            record = dir_curs.fetchone()
+            print "Record to upsert found {} ".format(record)
+            yield {
+                '_op_type': 'index',
+                '_index': os.environ['ES_INDEX_NAME'],
+                '_type': os.environ['ES_DOCUMENT_NAME'],
+                '_id': record['uid'],
+                '_source': dict(record)
+            }
 
     def get_messages(self):
 
-            # time.sleep(2)
-            messages = self.queue.receive_messages(
-                AttributeNames=["title", "type"],
-                MaxNumberOfMessages=10,
-                MessageAttributeNames=[
-                    'All'
-                ],
-                VisibilityTimeout=0,
-                WaitTimeSeconds=2
-            )
-            docs_summary = []
-            for message in messages:
-                psql_table = message.message_attributes['Table']['StringValue']
-                psql_op = message.message_attributes['Type']['StringValue']
-                item_id = message.body
-                # print "table: {}".format(psql_table)
-                # print "original op {}".format(psql_op)
-                # print "primary key {}".format(item_id)
-                docs_summary.append({"table": psql_table, "id": item_id, "op": psql_op})
-                message.delete()
+        messages = self.queue.receive_messages(
+            AttributeNames=["title", "type"],
+            MaxNumberOfMessages=10,
+            MessageAttributeNames=[
+                'All'
+            ],
+            VisibilityTimeout=2,
+            WaitTimeSeconds=2
+        )
+        docs_summary = []
+        for message in messages:
+            psql_table = message.message_attributes['Table']['StringValue']
+            psql_op = message.message_attributes['Type']['StringValue']
+            item_id = message.body
+            docs_summary.append({"table": psql_table, "id": item_id, "op": psql_op})
+            message.delete()
 
-            return docs_summary
+        return docs_summary
 
 
 def main():
-    print "ok"
     i = Indexer()
-    print "done"
     i.run()
 
 
